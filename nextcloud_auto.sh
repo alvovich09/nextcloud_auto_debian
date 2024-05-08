@@ -1,5 +1,8 @@
 #!/bin/bash
 
+#Обновляем пакеты ОС
+sudo apt update&& apt upgrade -y
+
 #Добавляем репозиторий Bullseye
 
 echo -e "#Debian 11 (Bullseye)
