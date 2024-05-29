@@ -53,10 +53,11 @@ echo "deb https://packages.sury.org/php/ $(lsb_release -sc) main" | tee /etc/apt
 wget -qO - https://packages.sury.org/php/apt.gpg | apt-key add -
 #Обновляем список пакетов
 sudo apt update
-#Устанавливаем php
-sudo apt  install php8.3 -y
-#Устанавливаем дополнительные модули для взаимодействия PHP-Nextcloud
-sudo apt install libapache2-mod-php php-gd php-mysql php-curl php-mbstring php-intl php-gmp php-bcmath php-xml php-imagick php-zip -y
+
+#Устанавливаем php и дополнительные модули для взаимодействия PHP-Nextcloud
+export PHP_VER=8.3
+apt install php${PHP_VER}-fpm php${PHP_VER}-common php${PHP_VER}-zip php${PHP_VER}-xml php${PHP_VER}-intl php${PHP_VER}-gd php${PHP_VER}-mysql php${PHP_VER}-mbstring php${PHP_VER}-curl php${PHP_VER}-imagick php${PHP_VER}-gmp php${PHP_VER}-bcmath libmagickcore-6.q16-6-extra -y
+
 #Настройка php для nextcloud
 
 PHP_WWW_CONF="/etc/php/8.3/fpm/pool.d/www.conf"
@@ -92,3 +93,98 @@ sudo systemctl restart php8.3-fpm
 #Установка и настройка nginx
 
 sudo apt install nginx -y
+
+echo -n "Введите имя вашего будущего облачного сервера типа: nextcloud.domain.ru "
+read FQDN
+
+echo -n "Введите краткое имя вашего будущего облачного сервера типа: nextcloud "
+read SHORT_FQDN
+
+sudo cat > /etc/nginx/sites-enabled/nextcloud.conf <<EOF
+
+server {
+        listen 80;
+        listen 443 ssl;
+        server_name ${FQDN};
+
+        if (\$scheme = 'http') {
+            return 301 https://\$host\$request_uri;
+        }
+
+        ssl_certificate /etc/nginx/ssl/cert.pem;
+        ssl_certificate_key /etc/nginx/ssl/cert.key;
+
+        root /var/www/nextcloud;
+
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        client_max_body_size 10G;
+        fastcgi_buffers 64 4K;
+
+        rewrite ^/caldav(.*)\$ /remote.php/caldav\$1 redirect;
+        rewrite ^/carddav(.*)\$ /remote.php/carddav\$1 redirect;
+        rewrite ^/webdav(.*)\$ /remote.php/webdav\$1 redirect;
+
+        index index.php;
+        error_page 403 = /core/templates/403.php;
+        error_page 404 = /core/templates/404.php;
+
+        location = /robots.txt {
+            allow all;
+            log_not_found off;
+            access_log off;
+        }
+
+        location ~ ^/(data|config|\.ht|db_structure\.xml|README) {
+                deny all;
+        }
+
+        location ^~ /.well-known {
+                location = /.well-known/carddav { return 301 /remote.php/dav/; }
+                location = /.well-known/caldav  { return 301 /remote.php/dav/; }
+                location = /.well-known/webfinger  { return 301 /index.php/.well-known/webfinger; }
+                location = /.well-known/nodeinfo  { return 301 /index.php/.well-known/nodeinfo; }
+                location ^~ /.well-known{ return 301 /index.php/\$uri; }
+                try_files \$uri \$uri/ =404;
+        }
+
+        location / {
+                rewrite ^/.well-known/host-meta /public.php?service=host-meta last;
+                rewrite ^/.well-known/host-meta.json /public.php?service=host-meta-json last;
+                rewrite ^(/core/doc/[^\/]+/)\$ \$1/index.html;
+                try_files \$uri \$uri/ index.php;
+        }
+
+        location ~ ^(.+?\.php)(/.*)?$ {
+                try_files \$1 = 404;
+                include fastcgi_params;
+                fastcgi_param SCRIPT_FILENAME \$document_root\$1;
+                fastcgi_param PATH_INFO \$2;
+                fastcgi_param HTTPS on;
+                fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        }
+
+        location ~* ^.+\.(jpg|jpeg|gif|bmp|ico|png|css|js|swf)$ {
+                expires modified +30d;
+                access_log off;
+        }
+}
+EOF
+
+sudo mkdir /etc/nginx/ssl
+cd /etc/nginx/ssl
+
+openssl req -new -x509 -days 1461 -nodes -out cert.pem -keyout cert.key -subj "/C=RU/ST=SPb/L=SPb/O=Global Security/OU=IT Department/CN=${FQDN}/CN=${SHORT_FQDN}"
+
+sudo systemctl stop apache2
+sudo systemctl disable apache2
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+
+#Скачиваем unzip
+sudo apt install unzip -y
+
+#Скачиваем и распаковываем послндюю версию nextcloud
+sudo wget https://download.nextcloud.com/server/releases/latest.zip -P /tmp/
+sudo unzip /tmp/latest.zip -d /tmp/
+sudo mv /tmp/nextcloud /var/www
+sudo chown -R www-data:www-data /var/www/nextcloud
